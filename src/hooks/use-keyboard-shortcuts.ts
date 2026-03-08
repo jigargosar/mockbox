@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useCanvasStore } from '../store/canvas-store'
+import { useCanvasStore, selectCurrentPage } from '../store/canvas-store'
 
 const ARROW_STEP = 1
 const ARROW_SHIFT_STEP = 10
@@ -88,6 +88,24 @@ export function useKeyboardShortcuts() {
                         store.getState().moveDown()
                     }
                     break
+                case 'Tab': {
+                    e.preventDefault()
+                    const page = selectCurrentPage(store.getState())
+                    const sorted = [...page.components].sort((a, b) => a.zIndex - b.zIndex)
+                    if (sorted.length === 0) break
+                    const currentIds = store.getState().selectedIds
+                    if (currentIds.length === 0) {
+                        store.getState().select(sorted[0].id, false)
+                    } else {
+                        const lastId = currentIds[currentIds.length - 1]
+                        const idx = sorted.findIndex((c) => c.id === lastId)
+                        const nextIdx = shift
+                            ? (idx - 1 + sorted.length) % sorted.length
+                            : (idx + 1) % sorted.length
+                        store.getState().select(sorted[nextIdx].id, false)
+                    }
+                    break
+                }
                 case 'Delete':
                 case 'Backspace':
                     e.preventDefault()

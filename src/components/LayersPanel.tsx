@@ -1,5 +1,6 @@
 import { useCanvasStore, selectCurrentPage } from '../store/canvas-store'
 import { useLayerDrag } from '../hooks/use-layer-drag'
+import type { ComponentId, WireframeComponent } from '../types/component'
 
 export function LayersPanel() {
     const page = useCanvasStore(selectCurrentPage)
@@ -12,6 +13,19 @@ export function LayersPanel() {
     const sorted = [...page.components].sort((a, b) => b.zIndex - a.zIndex)
     const { draggedId, dropIndex, onPointerDown, containerRef } = useLayerDrag(sorted.length)
 
+    // Build group structure: collect unique groupIds in display order
+    const seenGroups = new Set<ComponentId>()
+    const displayRows: ({ type: 'group-header'; groupId: ComponentId; memberCount: number } | { type: 'component'; component: WireframeComponent; indented: boolean })[] = []
+
+    for (const component of sorted) {
+        if (component.groupId && !seenGroups.has(component.groupId)) {
+            seenGroups.add(component.groupId)
+            const memberCount = sorted.filter((c) => c.groupId === component.groupId).length
+            displayRows.push({ type: 'group-header', groupId: component.groupId, memberCount })
+        }
+        displayRows.push({ type: 'component', component, indented: !!component.groupId })
+    }
+
     return (
         <div className="flex flex-col border-t border-gray-200">
             <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200">
@@ -19,15 +33,31 @@ export function LayersPanel() {
                 <span className="text-[10px] text-gray-400">{sorted.length}</span>
             </div>
             <div className="max-h-48 overflow-y-auto" ref={containerRef}>
-                {sorted.map((component, visualIndex) => {
+                {displayRows.map((row) => {
+                    if (row.type === 'group-header') {
+                        return (
+                            <div
+                                key={`group-${row.groupId}`}
+                                className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-purple-600 bg-purple-50 border-b border-gray-100"
+                            >
+                                <span>&#x25E3;</span>
+                                <span>Group</span>
+                                <span className="text-purple-400">({row.memberCount})</span>
+                            </div>
+                        )
+                    }
+
+                    const component = row.component
                     const isSelected = selectedIds.includes(component.id)
                     const isDragged = draggedId === component.id
+                    const visualIndex = sorted.indexOf(component)
                     const showDropBefore = dropIndex === visualIndex
+
                     return (
                         <div key={component.id} data-layer-row>
                             {showDropBefore && <div className="h-0.5 bg-blue-500 mx-1" />}
                             <div
-                                className={`flex items-center gap-1 px-2 py-1 text-xs cursor-pointer border-b border-gray-100 ${isSelected ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-100'} ${isDragged ? 'opacity-40' : ''}`}
+                                className={`flex items-center gap-1 py-1 text-xs cursor-pointer border-b border-gray-100 ${row.indented ? 'pl-5 pr-2' : 'px-2'} ${isSelected ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-100'} ${isDragged ? 'opacity-40' : ''}`}
                                 onClick={(e) => select(component.id, e.shiftKey)}
                             >
                                 <span

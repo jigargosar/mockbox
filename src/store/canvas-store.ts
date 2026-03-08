@@ -425,11 +425,22 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
 
         select: (id, additive) => {
             set((s) => {
+                const page = s.project.pages.find((p) => p.id === s.currentPageId)
+                const component = page?.components.find((c) => c.id === id)
+
+                // Expand to all group members when selecting a grouped component
+                const idsToSelect = component?.groupId
+                    ? page!.components.filter((c) => c.groupId === component.groupId).map((c) => c.id)
+                    : [id]
+
                 if (additive) {
-                    const included = s.selectedIds.includes(id)
-                    return { selectedIds: included ? s.selectedIds.filter((i) => i !== id) : [...s.selectedIds, id] }
+                    const anySelected = idsToSelect.some((gid) => s.selectedIds.includes(gid))
+                    if (anySelected) {
+                        return { selectedIds: s.selectedIds.filter((sid) => !idsToSelect.includes(sid)) }
+                    }
+                    return { selectedIds: [...s.selectedIds, ...idsToSelect] }
                 }
-                return { selectedIds: [id] }
+                return { selectedIds: idsToSelect }
             })
         },
 
@@ -442,14 +453,24 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
 
         marqueeSelect: (bounds) => {
             const components = currentPageComponents()
+            // Intersection check: select any component that overlaps the marquee
+            const hitIds = new Set(
+                components
+                    .filter(
+                        (c) =>
+                            c.bounds.x < bounds.x + bounds.width &&
+                            c.bounds.x + c.bounds.width > bounds.x &&
+                            c.bounds.y < bounds.y + bounds.height &&
+                            c.bounds.y + c.bounds.height > bounds.y,
+                    )
+                    .map((c) => c.id),
+            )
+            // Expand to include all group members for any hit group member
+            const hitGroupIds = new Set(
+                components.filter((c) => hitIds.has(c.id) && c.groupId).map((c) => c.groupId!),
+            )
             const ids = components
-                .filter(
-                    (c) =>
-                        c.bounds.x >= bounds.x &&
-                        c.bounds.y >= bounds.y &&
-                        c.bounds.x + c.bounds.width <= bounds.x + bounds.width &&
-                        c.bounds.y + c.bounds.height <= bounds.y + bounds.height,
-                )
+                .filter((c) => hitIds.has(c.id) || (c.groupId && hitGroupIds.has(c.groupId)))
                 .map((c) => c.id)
             set({ selectedIds: ids })
         },

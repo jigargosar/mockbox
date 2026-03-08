@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useCanvasStore, selectCurrentPage } from '../store/canvas-store'
 import { snapToGrid } from '../utils/alignment'
+import { toast } from '../utils/toast'
 import type { ComponentId, Point } from '../types/component'
 
 type InteractionMode = 'idle' | 'panning' | 'dragging' | 'marquee' | 'resizing'
@@ -15,6 +16,8 @@ export function useCanvasInteractions(svgRef: React.RefObject<SVGSVGElement | nu
     const [spaceHeld, setSpaceHeld] = useState(false)
     const dragStartRef = useRef<Point | null>(null)
     const dragComponentRef = useRef<ComponentId | null>(null)
+    const pendingClickRef = useRef<ComponentId | null>(null)
+    const didDragRef = useRef(false)
     const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
     const resizeStartRef = useRef<{ x: number; y: number; bounds: { x: number; y: number; width: number; height: number } } | null>(null)
     const spaceHeldRef = useRef(false)
@@ -81,9 +84,23 @@ export function useCanvasInteractions(svgRef: React.RefObject<SVGSVGElement | nu
 
             if (componentId) {
                 const component = selectCurrentPage(store.getState()).components.find((c) => c.id === componentId)
-                if (component?.locked) return
+                if (component?.locked) {
+                    toast('Component is locked')
+                    return
+                }
 
-                store.getState().select(componentId, e.shiftKey)
+                const alreadySelected = store.getState().selectedIds.includes(componentId)
+
+                if (e.shiftKey) {
+                    store.getState().select(componentId, true)
+                } else if (alreadySelected) {
+                    // Defer deselect-others to mouseup so multi-drag works
+                    pendingClickRef.current = componentId
+                } else {
+                    store.getState().select(componentId, false)
+                }
+
+                didDragRef.current = false
                 setMode('dragging')
                 const point = screenToCanvas(e.clientX, e.clientY)
                 dragStartRef.current = point
@@ -120,6 +137,7 @@ export function useCanvasInteractions(svgRef: React.RefObject<SVGSVGElement | nu
                 const dx = snapToGrid(rawDx, gridSize)
                 const dy = snapToGrid(rawDy, gridSize)
                 if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
+                    didDragRef.current = true
                     store.getState().moveSelected(dx, dy)
                     dragStartRef.current = { x: dragStartRef.current.x + dx, y: dragStartRef.current.y + dy }
                 }
@@ -184,6 +202,14 @@ export function useCanvasInteractions(svgRef: React.RefObject<SVGSVGElement | nu
                 store.getState().marqueeSelect({ x, y, width, height })
             }
         }
+
+        // Deferred single-select: if clicked (not dragged) on an already-selected
+        // component, narrow selection to just that component now
+        if (mode === 'dragging' && pendingClickRef.current && !didDragRef.current) {
+            store.getState().select(pendingClickRef.current, false)
+        }
+        pendingClickRef.current = null
+        didDragRef.current = false
 
         setMode('idle')
         setMarqueeStart(null)

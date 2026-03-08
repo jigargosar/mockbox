@@ -53,6 +53,18 @@ export function Canvas() {
         for (const component of sorted) {
             if (!component.visible) continue
             const g = renderMode === 'sketchy' ? renderSketchyComponent(svg, component) : renderCleanComponent(component)
+
+            // Insert invisible hit area covering full bounds so the entire
+            // component area is clickable, not just the thin roughjs strokes
+            const hitArea = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+            hitArea.setAttribute('x', String(component.bounds.x))
+            hitArea.setAttribute('y', String(component.bounds.y))
+            hitArea.setAttribute('width', String(component.bounds.width))
+            hitArea.setAttribute('height', String(component.bounds.height))
+            hitArea.setAttribute('fill', 'transparent')
+            hitArea.setAttribute('stroke', 'none')
+            g.insertBefore(hitArea, g.firstChild)
+
             g.dataset.componentId = component.id
             layer.appendChild(g)
         }
@@ -116,9 +128,22 @@ export function Canvas() {
             setPreviewPosition(null)
             return
         }
+        // Detect resize handle click (DOM-based, handles are React-rendered)
         const target = e.target as SVGElement
-        const componentGroup = target.closest('[data-component-id]') as SVGElement | null
-        const componentId = componentGroup?.dataset.componentId as ComponentId | undefined
+        const handleEl = target.closest('[data-handle]') as SVGElement | null
+        if (handleEl) {
+            const handle = handleEl.dataset.handle as 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw' | undefined
+            const compId = handleEl.dataset.componentId as ComponentId | undefined
+            if (handle && compId) {
+                handleMouseDown(e, compId, handle)
+                return
+            }
+        }
+
+        // Bounds-based hit testing: click anywhere inside a component's
+        // bounding box to select/drag, not just on its thin visual strokes
+        const point = screenToCanvas(e.clientX, e.clientY)
+        const componentId = findTopmostComponentAt(page.components, point)
         handleMouseDown(e, componentId)
     }
 
@@ -129,10 +154,9 @@ export function Canvas() {
             return
         }
 
-        // Track hovered component
-        const target = e.target as SVGElement
-        const componentGroup = target.closest('[data-component-id]') as SVGElement | null
-        const hovered = componentGroup?.dataset.componentId as ComponentId | undefined
+        // Bounds-based hover tracking
+        const point = screenToCanvas(e.clientX, e.clientY)
+        const hovered = findTopmostComponentAt(page.components, point)
         setHoveredComponentId(hovered ?? null)
 
         // Track placement preview position
@@ -205,6 +229,9 @@ export function Canvas() {
     // Multi-select bounding box
     const multiSelectBounds = selectedIds.length > 1 ? computeMultiSelectBounds(page.components, selectedIds) : null
 
+    // Group bounding boxes for selected groups
+    const selectedGroupBounds = computeSelectedGroupBounds(page.components, selectedIds)
+
     return (
         <div className="absolute inset-0 overflow-hidden bg-white">
             {/* Rulers */}
@@ -268,6 +295,23 @@ export function Canvas() {
                             opacity={0.5}
                         />
                     )}
+
+                    {/* Group bounding boxes */}
+                    {selectedGroupBounds.map((gb) => (
+                        <rect
+                            key={gb.groupId}
+                            x={gb.bounds.x - 4}
+                            y={gb.bounds.y - 4}
+                            width={gb.bounds.width + 8}
+                            height={gb.bounds.height + 8}
+                            fill="none"
+                            stroke="#8b5cf6"
+                            strokeWidth={1.5}
+                            strokeDasharray="6 3"
+                            rx={4}
+                            pointerEvents="none"
+                        />
+                    ))}
 
                     {/* Locked component indicators */}
                     {page.components.filter((c) => c.locked && c.visible).map((c) => (
@@ -383,6 +427,47 @@ function computeCursor(mode: InteractionMode, spaceHeld: boolean, hasDraggingKin
     return 'cursor-default'
 }
 
+function findTopmostComponentAt(components: readonly WireframeComponent[], point: Point): ComponentId | undefined {
+    // Iterate front-to-back (highest z-index first) to find the topmost hit
+    const sorted = [...components].sort((a, b) => b.zIndex - a.zIndex)
+    for (const c of sorted) {
+        if (!c.visible) continue
+        if (
+            point.x >= c.bounds.x &&
+            point.x <= c.bounds.x + c.bounds.width &&
+            point.y >= c.bounds.y &&
+            point.y <= c.bounds.y + c.bounds.height
+        ) {
+            return c.id
+        }
+    }
+    return undefined
+}
+
+function computeSelectedGroupBounds(
+    components: readonly WireframeComponent[],
+    selectedIds: readonly ComponentId[],
+): { groupId: ComponentId; bounds: Bounds }[] {
+    const groupIds = new Set<ComponentId>()
+    for (const c of components) {
+        if (c.groupId && selectedIds.includes(c.id)) groupIds.add(c.groupId)
+    }
+    const result: { groupId: ComponentId; bounds: Bounds }[] = []
+    for (const groupId of groupIds) {
+        const members = components.filter((c) => c.groupId === groupId)
+        if (members.length < 2) continue
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+        for (const c of members) {
+            minX = Math.min(minX, c.bounds.x)
+            minY = Math.min(minY, c.bounds.y)
+            maxX = Math.max(maxX, c.bounds.x + c.bounds.width)
+            maxY = Math.max(maxY, c.bounds.y + c.bounds.height)
+        }
+        result.push({ groupId, bounds: { x: minX, y: minY, width: maxX - minX, height: maxY - minY } })
+    }
+    return result
+}
+
 function computeMultiSelectBounds(components: readonly WireframeComponent[], ids: readonly ComponentId[]): Bounds | null {
     const selected = components.filter((c) => ids.includes(c.id))
     if (selected.length < 2) return null
@@ -438,27 +523,37 @@ function SelectionOutline({ component }: { component: WireframeComponent }) {
         { cursor: 'e-resize', handle: 'e' as const, cx: x + width, cy: y + height / 2 },
     ]
 
+    const hitSize = 20
+
     return (
         <g>
-            <rect x={x} y={y} width={width} height={height} fill="none" stroke="#3b82f6" strokeWidth={1.5 } strokeDasharray="4 2" />
+            <rect x={x} y={y} width={width} height={height} fill="none" stroke="#3b82f6" strokeWidth={1.5} strokeDasharray="4 2" />
             {handles.map((h) => (
-                <rect
-                    key={h.handle}
-                    x={h.cx - handleSize / 2}
-                    y={h.cy - handleSize / 2}
-                    width={handleSize}
-                    height={handleSize}
-                    fill="white"
-                    stroke="#3b82f6"
-                    strokeWidth={1.5}
-                    style={{ cursor: h.cursor }}
-                    data-component-id={component.id}
-                    data-handle={h.handle}
-                    onMouseDown={(e) => {
-                        e.stopPropagation()
-                        // Handled via the parent's mousedown with handle detection
-                    }}
-                />
+                <g key={h.handle}>
+                    {/* Invisible expanded hit area for easier grabbing */}
+                    <rect
+                        x={h.cx - hitSize / 2}
+                        y={h.cy - hitSize / 2}
+                        width={hitSize}
+                        height={hitSize}
+                        fill="transparent"
+                        style={{ cursor: h.cursor }}
+                        data-component-id={component.id}
+                        data-handle={h.handle}
+                    />
+                    {/* Visible handle */}
+                    <rect
+                        x={h.cx - handleSize / 2}
+                        y={h.cy - handleSize / 2}
+                        width={handleSize}
+                        height={handleSize}
+                        fill="white"
+                        stroke="#3b82f6"
+                        strokeWidth={1.5}
+                        style={{ cursor: h.cursor }}
+                        pointerEvents="none"
+                    />
+                </g>
             ))}
         </g>
     )
