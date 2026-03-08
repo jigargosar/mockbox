@@ -14,6 +14,7 @@ import type {
     WireframeComponent,
 } from '../types/component'
 import { createComponentId, createHotspotId, createPageId, createProjectId } from '../utils/id'
+import { toast } from '../utils/toast'
 import { saveProject, loadAllProjects, loadCurrentProjectId } from '../utils/persistence'
 import { PALETTE_ENTRIES } from '../types/palette-registry'
 
@@ -136,6 +137,9 @@ type CanvasStore = {
     // Search
     paletteSearch: string
     setPaletteSearch: (query: string) => void
+
+    // History navigation
+    jumpToHistory: (targetIndex: number) => void
 
     // Hotspot actions
     toggleHotspotMode: () => void
@@ -453,7 +457,9 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
         copySelected: () => {
             const s = get()
             const selected = selectCurrentPageComponents(s).filter((c) => s.selectedIds.includes(c.id))
+            if (selected.length === 0) return
             set({ clipboard: selected })
+            toast(`Copied ${selected.length} component(s)`)
         },
 
         pasteClipboard: () => {
@@ -480,8 +486,13 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
         },
 
         cutSelected: () => {
-            get().copySelected()
+            const s = get()
+            const count = s.selectedIds.length
+            if (count === 0) return
+            const selected = selectCurrentPageComponents(s).filter((c) => s.selectedIds.includes(c.id))
+            set({ clipboard: selected })
             get().deleteSelected()
+            toast(`Cut ${count} component(s)`)
         },
 
         groupSelected: () => {
@@ -497,6 +508,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
                 redo: () => updatePageComponents(pageId, () => next),
                 undo: () => updatePageComponents(pageId, () => prev),
             })
+            toast(`Grouped ${ids.length} components`)
         },
 
         ungroupSelected: () => {
@@ -512,6 +524,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
                 redo: () => updatePageComponents(pageId, () => next),
                 undo: () => updatePageComponents(pageId, () => prev),
             })
+            toast('Ungrouped')
         },
 
         bringToFront: () => {
@@ -676,6 +689,23 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
             if (s.historyIndex >= s.history.length - 1) return
             set({ historyIndex: s.historyIndex + 1 })
             s.history[s.historyIndex + 1].redo()
+            get().autoSave()
+        },
+
+        jumpToHistory: (targetIndex) => {
+            const s = get()
+            if (targetIndex === s.historyIndex) return
+            if (targetIndex < -1 || targetIndex >= s.history.length) return
+            if (targetIndex < s.historyIndex) {
+                for (let i = s.historyIndex; i > targetIndex; i--) {
+                    s.history[i].undo()
+                }
+            } else {
+                for (let i = s.historyIndex + 1; i <= targetIndex; i++) {
+                    s.history[i].redo()
+                }
+            }
+            set({ historyIndex: targetIndex })
             get().autoSave()
         },
 

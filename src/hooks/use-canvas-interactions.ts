@@ -12,6 +12,7 @@ export function useCanvasInteractions(svgRef: React.RefObject<SVGSVGElement | nu
     const [marqueeStart, setMarqueeStart] = useState<Point | null>(null)
     const [marqueeEnd, setMarqueeEnd] = useState<Point | null>(null)
     const [resizeHandle, setResizeHandle] = useState<ResizeHandle | null>(null)
+    const [spaceHeld, setSpaceHeld] = useState(false)
     const dragStartRef = useRef<Point | null>(null)
     const dragComponentRef = useRef<ComponentId | null>(null)
     const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
@@ -24,10 +25,14 @@ export function useCanvasInteractions(svgRef: React.RefObject<SVGSVGElement | nu
             if (e.code === 'Space' && !e.repeat && (e.target as HTMLElement).tagName !== 'INPUT') {
                 e.preventDefault()
                 spaceHeldRef.current = true
+                setSpaceHeld(true)
             }
         }
         const onUp = (e: KeyboardEvent) => {
-            if (e.code === 'Space') spaceHeldRef.current = false
+            if (e.code === 'Space') {
+                spaceHeldRef.current = false
+                setSpaceHeld(false)
+            }
         }
         window.addEventListener('keydown', onDown)
         window.addEventListener('keyup', onUp)
@@ -216,6 +221,7 @@ export function useCanvasInteractions(svgRef: React.RefObject<SVGSVGElement | nu
 
     return {
         mode,
+        spaceHeld,
         marqueeRect,
         handleMouseDown,
         handleMouseMove,

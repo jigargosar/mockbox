@@ -5,6 +5,7 @@ import { useCanvasInteractions } from '../hooks/use-canvas-interactions'
 import { renderSketchyComponent } from '../renderers/sketchy'
 import { renderCleanComponent } from '../renderers/clean'
 import { snapToGrid } from '../utils/alignment'
+import { PALETTE_ENTRIES } from '../types/palette-registry'
 import type { Bounds, ComponentId, Hotspot, HotspotId, PageId, Point, WireframeComponent } from '../types/component'
 
 export function Canvas() {
@@ -31,8 +32,11 @@ export function Canvas() {
     const [hotspotDrawStart, setHotspotDrawStart] = useState<Point | null>(null)
     const [hotspotDrawEnd, setHotspotDrawEnd] = useState<Point | null>(null)
     const [pendingHotspotBounds, setPendingHotspotBounds] = useState<Bounds | null>(null)
+    const [hoveredComponentId, setHoveredComponentId] = useState<ComponentId | null>(null)
+    const [previewPosition, setPreviewPosition] = useState<Point | null>(null)
+    const [contextMenu, setContextMenu] = useState<{ screenX: number; screenY: number; componentId: ComponentId | null } | null>(null)
 
-    const { marqueeRect, handleMouseDown, handleMouseMove, handleMouseUp, handleWheel, screenToCanvas } =
+    const { mode, spaceHeld, marqueeRect, handleMouseDown, handleMouseMove, handleMouseUp, handleWheel, screenToCanvas } =
         useCanvasInteractions(svgRef)
 
     // Render components via imperative roughjs
@@ -82,6 +86,11 @@ export function Canvas() {
         : null
 
     function handleCanvasMouseDown(e: React.MouseEvent<SVGSVGElement>) {
+        // Dismiss context menu on any click
+        if (contextMenu) {
+            setContextMenu(null)
+        }
+
         if (hotspotMode && e.button === 0 && !e.altKey && !e.ctrlKey && !e.metaKey) {
             // Check if clicking on existing hotspot
             const target = e.target as SVGElement
@@ -104,6 +113,7 @@ export function Canvas() {
             const gs = useCanvasStore.getState().gridSize
             addComponent(currentDraggingKind, snapToGrid(point.x, gs), snapToGrid(point.y, gs))
             setDraggingKind(null)
+            setPreviewPosition(null)
             return
         }
         const target = e.target as SVGElement
@@ -118,6 +128,22 @@ export function Canvas() {
             setHotspotDrawEnd(point)
             return
         }
+
+        // Track hovered component
+        const target = e.target as SVGElement
+        const componentGroup = target.closest('[data-component-id]') as SVGElement | null
+        const hovered = componentGroup?.dataset.componentId as ComponentId | undefined
+        setHoveredComponentId(hovered ?? null)
+
+        // Track placement preview position
+        if (useCanvasStore.getState().draggingKind) {
+            const point = screenToCanvas(e.clientX, e.clientY)
+            const gs = useCanvasStore.getState().gridSize
+            setPreviewPosition({ x: snapToGrid(point.x, gs), y: snapToGrid(point.y, gs) })
+        } else if (previewPosition) {
+            setPreviewPosition(null)
+        }
+
         handleMouseMove(e)
     }
 
@@ -140,6 +166,23 @@ export function Canvas() {
         handleMouseUp()
     }
 
+    function handleContextMenu(e: React.MouseEvent) {
+        e.preventDefault()
+        const target = e.target as SVGElement
+        const componentGroup = target.closest('[data-component-id]') as SVGElement | null
+        const componentId = componentGroup?.dataset.componentId as ComponentId | undefined
+
+        if (componentId && !selectedIds.includes(componentId)) {
+            useCanvasStore.getState().select(componentId, false)
+        }
+
+        setContextMenu({
+            screenX: e.clientX,
+            screenY: e.clientY,
+            componentId: componentId ?? null,
+        })
+    }
+
     function handleTargetPageSelected(targetPageId: PageId) {
         if (!pendingHotspotBounds) return
         useCanvasStore.getState().addHotspot(currentPageId, targetPageId, pendingHotspotBounds)
@@ -150,8 +193,17 @@ export function Canvas() {
         setPendingHotspotBounds(null)
     }
 
+    // Compute cursor based on interaction state
+    const cursorClass = computeCursor(mode, spaceHeld, draggingKind !== null, hotspotMode)
+
     const rulerOffset = showRulers ? 24 : 0
     const scaledGrid = gridSize * zoom
+
+    // Get default size for placement preview
+    const previewEntry = draggingKind ? PALETTE_ENTRIES.find((e) => e.kind === draggingKind) : null
+
+    // Multi-select bounding box
+    const multiSelectBounds = selectedIds.length > 1 ? computeMultiSelectBounds(page.components, selectedIds) : null
 
     return (
         <div className="absolute inset-0 overflow-hidden bg-white">
@@ -166,14 +218,16 @@ export function Canvas() {
 
             <svg
                 ref={svgRef}
-                className={`absolute inset-0 ${hotspotMode ? 'cursor-crosshair' : 'cursor-crosshair'}`}
+                className={`absolute inset-0 ${cursorClass}`}
                 style={{ top: rulerOffset, left: rulerOffset, width: `calc(100% - ${rulerOffset}px)`, height: `calc(100% - ${rulerOffset}px)` }}
                 onMouseDown={handleCanvasMouseDown}
                 onMouseMove={handleCanvasMouseMove}
                 onMouseUp={handleCanvasMouseUp}
+                onMouseLeave={() => { setHoveredComponentId(null); setPreviewPosition(null) }}
                 onWheel={handleWheel}
                 onDrop={handleDrop}
                 onDragOver={handleDragOver}
+                onContextMenu={handleContextMenu}
             >
                 {/* Grid */}
                 <defs>
@@ -187,12 +241,54 @@ export function Canvas() {
                 <g transform={`translate(${panX}, ${panY}) scale(${zoom})`}>
                     <g ref={componentsLayerRef} />
 
+                    {/* Hover outline (only for non-selected components) */}
+                    {hoveredComponentId && !selectedIds.includes(hoveredComponentId) && mode === 'idle' && (() => {
+                        const hovered = page.components.find((c) => c.id === hoveredComponentId)
+                        return hovered ? <HoverOutline component={hovered} /> : null
+                    })()}
+
                     {/* Selection outlines */}
                     {selectedIds.map((id) => {
                         const component = page.components.find((c) => c.id === id)
                         if (!component) return null
                         return <SelectionOutline key={id} component={component} />
                     })}
+
+                    {/* Multi-select bounding box */}
+                    {multiSelectBounds && (
+                        <rect
+                            x={multiSelectBounds.x}
+                            y={multiSelectBounds.y}
+                            width={multiSelectBounds.width}
+                            height={multiSelectBounds.height}
+                            fill="none"
+                            stroke="#3b82f6"
+                            strokeWidth={0.5}
+                            strokeDasharray="8 4"
+                            opacity={0.5}
+                        />
+                    )}
+
+                    {/* Locked component indicators */}
+                    {page.components.filter((c) => c.locked && c.visible).map((c) => (
+                        <LockedIndicator key={`lock-${c.id}`} component={c} />
+                    ))}
+
+                    {/* Placement preview ghost */}
+                    {previewEntry && previewPosition && (
+                        <rect
+                            x={previewPosition.x}
+                            y={previewPosition.y}
+                            width={previewEntry.defaultSize.width}
+                            height={previewEntry.defaultSize.height}
+                            fill="rgba(59, 130, 246, 0.06)"
+                            stroke="#3b82f6"
+                            strokeWidth={1}
+                            strokeDasharray="4 3"
+                            opacity={0.5}
+                            rx={3}
+                        />
+                    )}
 
                     {/* Hotspot overlays */}
                     {hotspots.map((hotspot) => (
@@ -261,7 +357,69 @@ export function Canvas() {
                     onCancel={handleTargetPickerCancel}
                 />
             )}
+
+            {/* Context menu */}
+            {contextMenu && (
+                <CanvasContextMenu
+                    screenX={contextMenu.screenX}
+                    screenY={contextMenu.screenY}
+                    hasComponent={contextMenu.componentId !== null}
+                    onClose={() => setContextMenu(null)}
+                />
+            )}
         </div>
+    )
+}
+
+type InteractionMode = 'idle' | 'panning' | 'dragging' | 'marquee' | 'resizing'
+
+function computeCursor(mode: InteractionMode, spaceHeld: boolean, hasDraggingKind: boolean, hotspotMode: boolean): string {
+    if (mode === 'panning') return 'cursor-grabbing'
+    if (mode === 'dragging') return 'cursor-grabbing'
+    if (mode === 'marquee') return 'cursor-crosshair'
+    if (spaceHeld) return 'cursor-grab'
+    if (hasDraggingKind) return 'cursor-crosshair'
+    if (hotspotMode) return 'cursor-crosshair'
+    return 'cursor-default'
+}
+
+function computeMultiSelectBounds(components: readonly WireframeComponent[], ids: readonly ComponentId[]): Bounds | null {
+    const selected = components.filter((c) => ids.includes(c.id))
+    if (selected.length < 2) return null
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const c of selected) {
+        minX = Math.min(minX, c.bounds.x)
+        minY = Math.min(minY, c.bounds.y)
+        maxX = Math.max(maxX, c.bounds.x + c.bounds.width)
+        maxY = Math.max(maxY, c.bounds.y + c.bounds.height)
+    }
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+}
+
+function HoverOutline({ component }: { component: WireframeComponent }) {
+    const { x, y, width, height } = component.bounds
+    return (
+        <rect
+            x={x}
+            y={y}
+            width={width}
+            height={height}
+            fill="none"
+            stroke="#93c5fd"
+            strokeWidth={1}
+            rx={2}
+            pointerEvents="none"
+        />
+    )
+}
+
+function LockedIndicator({ component }: { component: WireframeComponent }) {
+    const { x, y, width } = component.bounds
+    return (
+        <g pointerEvents="none" opacity={0.5}>
+            <rect x={x + width - 16} y={y + 2} width={14} height={14} rx={2} fill="white" stroke="#94a3b8" strokeWidth={0.5} />
+            <text x={x + width - 12} y={y + 13} fontSize={10} fill="#64748b">&#x1F512;</text>
+        </g>
     )
 }
 
@@ -410,6 +568,77 @@ function TargetPagePicker({ bounds, panX, panY, zoom, rulerOffset, pages, curren
                 </button>
             ))}
         </div>
+    )
+}
+
+function CanvasContextMenu({ screenX, screenY, hasComponent, onClose }: { screenX: number; screenY: number; hasComponent: boolean; onClose: () => void }) {
+    const menuRef = useRef<HTMLDivElement>(null)
+    const store = useCanvasStore
+    const clipboardLength = store((s) => s.clipboard.length)
+
+    useEffect(() => {
+        function handleClick(e: MouseEvent) {
+            if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+                onClose()
+            }
+        }
+        function handleKey(e: KeyboardEvent) {
+            if (e.key === 'Escape') onClose()
+        }
+        window.addEventListener('mousedown', handleClick)
+        window.addEventListener('keydown', handleKey)
+        return () => {
+            window.removeEventListener('mousedown', handleClick)
+            window.removeEventListener('keydown', handleKey)
+        }
+    }, [onClose])
+
+    function action(fn: () => void) {
+        fn()
+        onClose()
+    }
+
+    return (
+        <div
+            ref={menuRef}
+            className="absolute z-50 min-w-[160px] rounded border border-gray-200 bg-white py-1 shadow-lg"
+            style={{ left: screenX, top: screenY }}
+        >
+            {hasComponent && (
+                <>
+                    <ContextMenuItem label="Cut" shortcut="Ctrl+X" onClick={() => action(() => store.getState().cutSelected())} />
+                    <ContextMenuItem label="Copy" shortcut="Ctrl+C" onClick={() => action(() => store.getState().copySelected())} />
+                    <ContextMenuItem label="Duplicate" shortcut="Ctrl+D" onClick={() => action(() => store.getState().duplicateSelected())} />
+                    <ContextMenuItem label="Delete" shortcut="Del" onClick={() => action(() => store.getState().deleteSelected())} />
+                    <div className="my-1 border-t border-gray-100" />
+                    <ContextMenuItem label="Bring to Front" shortcut="Ctrl+Shift+]" onClick={() => action(() => store.getState().bringToFront())} />
+                    <ContextMenuItem label="Send to Back" shortcut="Ctrl+Shift+[" onClick={() => action(() => store.getState().sendToBack())} />
+                    <ContextMenuItem label="Move Up" shortcut="Ctrl+]" onClick={() => action(() => store.getState().moveUp())} />
+                    <ContextMenuItem label="Move Down" shortcut="Ctrl+[" onClick={() => action(() => store.getState().moveDown())} />
+                    <div className="my-1 border-t border-gray-100" />
+                </>
+            )}
+            <ContextMenuItem
+                label="Paste"
+                shortcut="Ctrl+V"
+                onClick={() => action(() => store.getState().pasteClipboard())}
+                disabled={clipboardLength === 0}
+            />
+            <ContextMenuItem label="Select All" shortcut="Ctrl+A" onClick={() => action(() => store.getState().selectAll())} />
+        </div>
+    )
+}
+
+function ContextMenuItem({ label, shortcut, onClick, disabled = false }: { label: string; shortcut: string; onClick: () => void; disabled?: boolean }) {
+    return (
+        <button
+            className={`flex w-full items-center justify-between px-3 py-1.5 text-xs ${disabled ? 'text-gray-300 cursor-not-allowed' : 'text-gray-700 hover:bg-blue-50 hover:text-blue-600'}`}
+            onClick={disabled ? undefined : onClick}
+            disabled={disabled}
+        >
+            <span>{label}</span>
+            <span className="ml-4 text-[10px] text-gray-400">{shortcut}</span>
+        </button>
     )
 }
 

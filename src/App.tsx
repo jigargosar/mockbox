@@ -11,6 +11,7 @@ import { ShortcutOverlay } from './components/ShortcutOverlay'
 import { ExportMenu } from './components/ExportMenu'
 import { useKeyboardShortcuts } from './hooks/use-keyboard-shortcuts'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { ToastContainer } from './components/Toast'
 
 export function App() {
     useKeyboardShortcuts()
@@ -53,6 +54,9 @@ export function App() {
 
                 {/* Shortcuts help */}
                 <ShortcutOverlay />
+
+                {/* Toast notifications */}
+                <ToastContainer />
             </div>
         </ErrorBoundary>
     )

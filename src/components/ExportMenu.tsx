@@ -2,6 +2,7 @@ import { useState, useRef } from 'react'
 import { useCanvasStore } from '../store/canvas-store'
 import { exportProject, importProject } from '../utils/persistence'
 import { exportProjectAsPdf } from '../utils/export'
+import { toast } from '../utils/toast'
 
 export function ExportMenu() {
     const [isOpen, setIsOpen] = useState(false)
@@ -19,10 +20,13 @@ export function ExportMenu() {
         a.click()
         URL.revokeObjectURL(a.href)
         setIsOpen(false)
+        toast('Exported as .mockbox')
     }
 
     function handleExportPdf() {
-        exportProjectAsPdf(project, renderMode).catch(console.error)
+        exportProjectAsPdf(project, renderMode)
+            .then(() => toast('Exported as PDF'))
+            .catch(console.error)
         setIsOpen(false)
     }
 
@@ -31,15 +35,20 @@ export function ExportMenu() {
         if (!file) return
         const reader = new FileReader()
         reader.onload = () => {
-            const imported = importProject(reader.result as string)
-            useCanvasStore.setState({
-                project: imported,
-                currentPageId: imported.pages[0].id,
-                selectedIds: [],
-                history: [],
-                historyIndex: -1,
-            })
-            autoSave()
+            try {
+                const imported = importProject(reader.result as string)
+                useCanvasStore.setState({
+                    project: imported,
+                    currentPageId: imported.pages[0].id,
+                    selectedIds: [],
+                    history: [],
+                    historyIndex: -1,
+                })
+                autoSave()
+                toast(`Imported "${imported.name}"`)
+            } catch {
+                toast('Import failed: invalid file')
+            }
         }
         reader.readAsText(file)
         setIsOpen(false)

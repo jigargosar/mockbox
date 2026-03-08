@@ -70,17 +70,42 @@ export function useKeyboardShortcuts() {
                         store.getState().groupSelected()
                     }
                     break
+                case ']':
+                    if (ctrl && shift) {
+                        e.preventDefault()
+                        store.getState().bringToFront()
+                    } else if (ctrl) {
+                        e.preventDefault()
+                        store.getState().moveUp()
+                    }
+                    break
+                case '[':
+                    if (ctrl && shift) {
+                        e.preventDefault()
+                        store.getState().sendToBack()
+                    } else if (ctrl) {
+                        e.preventDefault()
+                        store.getState().moveDown()
+                    }
+                    break
                 case 'Delete':
                 case 'Backspace':
                     e.preventDefault()
                     store.getState().deleteSelected()
                     break
-                case 'Escape':
-                    store.getState().clearSelection()
-                    if (store.getState().presentationMode) {
-                        store.getState().togglePresentation()
+                case 'Escape': {
+                    const s = store.getState()
+                    if (s.draggingKind) {
+                        s.setDraggingKind(null)
+                    } else if (s.hotspotMode) {
+                        s.toggleHotspotMode()
+                    } else if (s.presentationMode) {
+                        s.togglePresentation()
+                    } else {
+                        s.clearSelection()
                     }
                     break
+                }
                 case 'ArrowUp':
                     e.preventDefault()
                     store.getState().moveSelected(0, shift ? -ARROW_SHIFT_STEP : -ARROW_STEP)
@@ -115,9 +140,6 @@ export function useKeyboardShortcuts() {
                         e.preventDefault()
                         store.getState().zoomToFit()
                     }
-                    break
-                case '?':
-                    // Could show shortcut overlay
                     break
             }
         }

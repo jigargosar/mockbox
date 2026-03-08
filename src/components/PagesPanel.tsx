@@ -72,7 +72,7 @@ export function PagesPanel() {
                                     {page.name}
                                 </span>
                             )}
-                            <div className="flex gap-1 opacity-0 group-hover:opacity-100">
+                            <div className="flex gap-1 shrink-0">
                                 <button
                                     className="text-[10px] text-gray-400 hover:text-blue-500"
                                     onClick={(e) => {
